@@ -32,33 +32,42 @@ class AttentionMeanPass(InductorPass):
 
     def __init__(self):
         super().__init__()
-        self.attention_op = torch.ops.vllm.unified_attention_with_output.default
 
-    def __call__(self, graph: torch.fx.Graph) -> None:
+    def _write_graph_to_file(self, graph: torch.fx.Graph, filename: str) -> None:
         """
-        Process the graph to inject mean calculations after attention operations.
+        Write the graph to a file in tabular format if tabulate is available.
 
         Args:
-            graph: The FX graph to process
+            graph: The FX graph to write
+            filename: The output filename
         """
+        with open(filename, "w") as f:
+            try:
+                # mimic graph.print_tabular but print to a file
+                from tabulate import tabulate
+
+                node_specs = [
+                    [n.op, n.name, n.target, n.args, n.kwargs] for n in graph.nodes
+                ]
+                f.write(
+                    tabulate(
+                        node_specs,
+                        headers=["opcode", "name", "target", "args", "kwargs"],
+                    )
+                )
+            except ImportError:
+                # Fallback to string representation
+                f.write(str(graph))
+
+    def __call__(self, graph: torch.fx.Graph) -> None:
         # Print a summary of the graph
         print(f"\n{'=' * 80}")
         print("Graph Summary")
         print(f"{'=' * 80}")
         print(f"Total nodes: {len(list(graph.nodes))}")
-
-        # Print tabular view (requires: pip install tabulate)
-        try:
-            graph.print_tabular()
-        except ImportError:
-            # Fallback to string representation
-            print(graph)
-
         print(f"{'=' * 80}\n")
 
-        # Save the graph to a file
-        with open("graph_before.txt", "w") as f:
-            f.write(str(graph))
+        self._write_graph_to_file(graph, "graph_before.txt")
 
         # Keep track of nodes to avoid modifying graph while iterating
         nodes_to_process = []
@@ -83,8 +92,7 @@ class AttentionMeanPass(InductorPass):
         for attention_node in nodes_to_process:
             self._inject_mean_calculation(graph, attention_node)
 
-        with open("graph_after.txt", "w") as f:
-            f.write(str(graph))
+        self._write_graph_to_file(graph, "graph_after.txt")
 
     def _inject_mean_calculation(
         self, graph: torch.fx.Graph, attention_node: fx.Node
