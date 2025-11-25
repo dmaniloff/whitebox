@@ -13,7 +13,7 @@ def main():
         # this didn't work
         # inductor_passes={
         #     # make sure this is exposed in __init__.py
-        #     "attention_mean_pass": "whitebox.AttentionMeanPass"
+        #     "attention_mean_pass": "glassbox.AttentionMeanPass"
         # }
         inductor_compile_config={"post_grad_custom_post_pass": AttentionMeanPass()},
     )

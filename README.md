@@ -1,4 +1,4 @@
-# Whitebox
+# glassbox
 
 
 ## What It Does
@@ -8,7 +8,7 @@ Registers a custom [PyTorch FX](https://docs.pytorch.org/docs/stable/fx.html) in
 ## How to Run
 
 ```bash
-python -m whitebox.main
+python -m glassbox.main
 ```
 
 The script will:
@@ -24,7 +24,7 @@ Check out `demo/sample_run.txt` for a sample run and the corresponding `graph_be
 
 The pass is registered via vLLM's [`CompilationConfig`](https://docs.vllm.ai/en/latest/api/vllm/config/#vllm.config.CompilationConfig) using the `inductor_compile_config` parameter with a custom `post_grad_custom_post_pass`.
 
-See `whitebox/passes/mean.py` for the FX graph transformation logic.
+See `glassbox/passes/mean.py` for the FX graph transformation logic.
 
 ## Dev setup
 There's no pyproject.toml file yet because I set this up manually for now:

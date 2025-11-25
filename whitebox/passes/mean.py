@@ -10,7 +10,7 @@ VLLM_UNIFIED_ATTENTION_WITH_OUTPUT = "vllm.unified_attention_with_output.default
 
 
 # Register a custom torch operation
-@torch.library.custom_op("whitebox::capture_mean", mutates_args=())
+@torch.library.custom_op("glassbox::capture_mean", mutates_args=())
 def capture_mean_op(x: torch.Tensor, layer_name: str) -> torch.Tensor:
     """Custom op to capture mean values."""
     mean_val = float(x.mean().item())
@@ -128,7 +128,7 @@ class AttentionMeanPass(InductorPass):
             with graph.inserting_after(att_output_node):
                 # Calculate mean via a capture node
                 capture_node = graph.call_function(
-                    torch.ops.whitebox.capture_mean.default,
+                    torch.ops.glassbox.capture_mean.default,
                     args=(att_output_node, layer_name),
                     kwargs={},
                 )
