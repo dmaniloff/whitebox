@@ -71,12 +71,10 @@ class BaseAttentionInjector(InductorPass):
             if (
                 node.op == "call_function"
                 and node.target == torch.ops.higher_order.auto_functionalized
+                and node.args
+                and str(node.args[0]) == VLLM_UNIFIED_ATTENTION_WITH_OUTPUT
             ):
-                if (
-                    node.args
-                    and str(node.args[0]) == VLLM_UNIFIED_ATTENTION_WITH_OUTPUT
-                ):
-                    nodes.append(node)
+                nodes.append(node)
         return nodes
 
     @abstractmethod
