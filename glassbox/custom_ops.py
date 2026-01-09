@@ -30,12 +30,29 @@ def capture_qkv_op(
     Returns:
         A tuple of clones of the input tensors (q, k, v)
     """
-    q_mean = float(q.mean().item())
-    k_mean = float(k.mean().item())
-    v_mean = float(v.mean().item())
     print(
-        f"[QKV_CAPTURE] {layer_name} - Q mean: {q_mean:.6f}, K mean: {k_mean:.6f}, V mean: {v_mean:.6f}"
+        f"[QKV_CAPTURE] {layer_name} - Q shape: {q.shape}, K shape: {k.shape}, V shape: {v.shape}"
     )
+    n = q.shape[0]  # flattened sequence length
+    num_q_heads = q.shape[1]
+    num_kv_heads = k.shape[1]
+    d = q.shape[2]
+
+    # Q: [8192, 32, 128], K: [8192, 8, 128]
+    # Reshape Q: 32 heads → 8 groups × 4 heads per group
+    q_grouped = q.view(
+        n, num_kv_heads, num_q_heads // num_kv_heads, d
+    )  # [n, num_kv_heads, heads_per_group, d]
+
+    # logits = torch.einsum("ngqd,mgd->gnqm", q_grouped, k)
+    # Result: [8, 8192, 4, 8192] = [kv_heads, seq, q_per_group, seq]
+
+    # reshape to standard form:
+    # logits = logits.permute(0, 2, 1, 3).reshape(num_q_heads, n, n)
+    # Result: [32, 8192, 8192]
+
+    # print(f"[QKV_CAPTURE] {layer_name} - Logits shape: {q_grouped.shape}")
+
     return q.clone(), k.clone(), v.clone()
 
 
