@@ -33,6 +33,8 @@ INJECTORS = {
 OPERATIONS = {
     "mean": torch.ops.glassbox.capture_mean.default,
     "qkv": torch.ops.glassbox.capture_qkv.default,
+    "svd_lanczos": torch.ops.glassbox.svd_of_scores_matrix_lanczos.default,
+    "svd_rnd": torch.ops.glassbox.svd_of_scores_matrix_rnd.default,
 }
 
 
@@ -42,27 +44,14 @@ def main():
     injector_type = args["--injector"]
     operation_type = args["--operation"]
 
-    if injector_type not in INJECTORS:
+    if (injector_cls := INJECTORS.get(injector_type)) is None:
         raise ValueError(
             f"Unknown injector: {injector_type}. Choose from: {list(INJECTORS.keys())}"
         )
-    if operation_type not in OPERATIONS:
+    if (custom_op := OPERATIONS.get(operation_type)) is None:
         raise ValueError(
             f"Unknown operation: {operation_type}. Choose from: {list(OPERATIONS.keys())}"
         )
-
-    # Warn about potentially incompatible combinations
-    if injector_type == "post" and operation_type == "qkv":
-        print(
-            "Warning: 'post' injector expects single tensor op, 'qkv' returns tuple - may fail"
-        )
-    if injector_type == "before" and operation_type == "mean":
-        print(
-            "Warning: 'before' injector expects (q,k,v) -> (q,k,v) op, 'mean' has different signature - may fail"
-        )
-
-    injector_cls = INJECTORS[injector_type]
-    custom_op = OPERATIONS[operation_type]
 
     print(f"Using injector: {injector_type}, operation: {operation_type}")
 
