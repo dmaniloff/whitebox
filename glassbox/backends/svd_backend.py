@@ -50,9 +50,6 @@ class SVDConfig(BaseSettings):
     heads: list[int] = [0]  # JSON list in env, e.g. GLASSBOX_SVD_HEADS='[0,1,2]'
 
 
-svd_config = SVDConfig()
-
-
 @dataclass
 class PerLayerSVDState:
     """Accumulates Q slices for a single attention layer."""
@@ -82,6 +79,10 @@ class SVDTritonAttentionBackend(TritonAttentionBackend):
 class SVDTritonAttentionImpl(TritonAttentionImpl):
     """Wraps TritonAttentionImpl.forward() to accumulate Q and periodically
     extract K from the paged cache for matrix-free SVD."""
+
+    # Class-level config; set before vLLM creates the engine.
+    # vLLM controls the constructor signature so we can't pass it there.
+    config: SVDConfig = SVDConfig()
 
     def forward(
         self,
@@ -133,8 +134,8 @@ class SVDTritonAttentionImpl(TritonAttentionImpl):
         state.q_buffer.append(query[q_start:q_end].detach().clone())
         state.step += 1
 
-        # 4. Every svd_config.interval steps, extract K and run SVD
-        if state.step % svd_config.interval == 0:
+        # 4. Every self.config.interval steps, extract K and run SVD
+        if state.step % self.config.interval == 0:
             try:
                 self._run_svd(layer_name, state, kv_cache, attn_metadata)
             except Exception:
@@ -209,7 +210,7 @@ class SVDTritonAttentionImpl(TritonAttentionImpl):
         Q_all = Q_all[:L]
         K_all = K_all[:L]
 
-        for head_idx in svd_config.heads:
+        for head_idx in self.config.heads:
             if head_idx >= Q_all.shape[1]:
                 continue
 
@@ -223,9 +224,9 @@ class SVDTritonAttentionImpl(TritonAttentionImpl):
             matvec = lambda v, Q=Qh, K=Kh: matvec_S(Q, K, v)
             matvec_t = lambda u, Q=Qh, K=Kh: matvec_ST(Q, K, u)
 
-            k = min(svd_config.rank, L - 1)
+            k = min(self.config.rank, L - 1)
 
-            if svd_config.method == "lanczos":
+            if self.config.method == "lanczos":
                 _, S, _ = svd_via_lanczos(
                     matvec=matvec,
                     matvec_t=matvec_t,

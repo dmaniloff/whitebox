@@ -81,16 +81,22 @@ def main(
     prompt: str,
 ) -> None:
     """Launch vLLM with the custom SVD attention backend."""
-    # CLI args override the pydantic config (which reads env vars / .env)
-    config = svd_mod.svd_config
+
+    # Build config: start from env vars / .env defaults, override with CLI args
+    overrides: dict = {}
     if interval is not None:
-        config.interval = interval
+        overrides["interval"] = interval
     if rank is not None:
-        config.rank = rank
+        overrides["rank"] = rank
     if method is not None:
-        config.method = method
+        overrides["method"] = method
     if heads:
-        config.heads = list(heads)
+        overrides["heads"] = list(heads)
+
+    # vLLM calls impl_cls(). There doesn't seem to be a way to inject extra args through the vLLM call path.
+    # So we set the config as a class variable on SVDTritonAttentionImpl before vLLM creates the engine.
+    config = svd_mod.SVDConfig(**overrides)
+    svd_mod.SVDTritonAttentionImpl.config = config
 
     logger.info("Creating vLLM engine with CUSTOM attention backend")
     logger.info("Model: %s", model)
