@@ -1,0 +1,111 @@
+✔ OpenAIHTTPBackend backend validated with model Qwen/Qwen2-7B-Instruct
+  {'target': 'http://localhost:8000', 'model': None, 'timeout': 60.0, 'http2': True, 'follow_redirects': True, 'verify': False, 'openai_paths': {'health': 'health', 'models':  
+  'v1/models', 'text_completions': 'v1/completions', 'chat_completions': 'v1/chat/completions', 'audio_transcriptions': 'v1/audio/transcriptions', 'audio_translations':        
+  'v1/audio/translations'}, 'validate_backend': {'method': 'GET', 'url': 'http://localhost:8000/health'}}                                                                       
+✔ Processor resolved
+  Using model 'Qwen/Qwen2-7B-Instruct' as processor                                                                                                                             
+✔ Request loader initialized with inf unique requests
+  {'data': "['prompt_tokens=128,output_tokens=64']", 'data_args': '[]', 'data_samples': -1, 'preprocessors': ['GenerativeColumnMapper',                                         
+  'GenerativeChatCompletionsRequestFormatter'], 'collator': 'GenerativeRequestCollator', 'sampler': 'None', 'num_workers': 1, 'random_seed': 42}                                
+✔ Resolved transient phase configurations
+  Warmup: percent=None value=None mode='prefer_duration'                                                                                                                        
+  Cooldown: percent=None value=None mode='prefer_duration'                                                                                                                      
+  Rampup (Throughput/Concurrent): 0.0                                                                                                                                           
+✔ SweepProfile profile resolved
+  {'str': "type_='sweep' completed_strategies=[] constraints={'max_seconds': 60.0} rampup_duration=0.0 sweep_size=5 strategy_type='constant' max_concurrency=None random_seed=42
+  synchronous_rate=-1.0 throughput_rate=-1.0 async_rates=[] measured_rates=[] strategy_types=['synchronous', 'throughput', 'constant', 'constant', 'constant']", 'type':        
+  'SweepProfile', 'class': 'SweepProfile', 'module': 'guidellm.benchmark.profiles', 'attributes': {'type_': 'sweep', 'completed_strategies': [], 'constraints': {'max_seconds': 
+  60.0}, 'rampup_duration': 0.0, 'sweep_size': 5, 'strategy_type': 'constant', 'max_concurrency': 'None', 'random_seed': 42, 'synchronous_rate': -1.0, 'throughput_rate': -1.0, 
+  'async_rates': [], 'measured_rates': []}}                                                                                                                                     
+✔ Output formats resolved
+  {'json': "output_path=PosixPath('benchmarks/results/20260306_174220/vanilla_eager')", 'csv': "output_path=PosixPath('benchmarks/results/20260306_174220/vanilla_eager')"}     
+✔ Setup complete, starting benchmarks...
+
+
+
+
+
+ℹ Run Summary Info
+|=============|==========|==========|======|======|======|==========|=========|=====|=========|========|=====|
+| Benchmark   | Timings                              ||||| Input Tokens           ||| Output Tokens        |||
+| Strategy    | Start    | End      | Dur  | Warm | Cool | Comp     | Inc     | Err | Comp    | Inc    | Err |
+|             |          |          | Sec  | Sec  | Sec  | Tot      | Tot     | Tot | Tot     | Tot    | Tot |
+|-------------|----------|----------|------|------|------|----------|---------|-----|---------|--------|-----|
+| synchronous | 17:52:19 | 17:53:19 | 60.0 | 0.0  | 0.0  | 4116.0   | 0.0     | 0.0 | 1792.0  | 0.0    | 0.0 |
+| throughput  | 17:53:23 | 17:54:23 | 60.0 | 0.0  | 0.0  | 127008.0 | 67791.0 | 0.0 | 55296.0 | 9326.0 | 0.0 |
+| constant    | 17:54:26 | 17:55:26 | 60.0 | 0.0  | 0.0  | 42483.0  | 1911.0  | 0.0 | 18496.0 | 429.0  | 0.0 |
+| constant    | 17:55:28 | 17:56:28 | 60.0 | 0.0  | 0.0  | 80556.0  | 4097.0  | 0.0 | 35072.0 | 885.0  | 0.0 |
+| constant    | 17:56:30 | 17:57:30 | 60.0 | 0.0  | 0.0  | 117159.0 | 7881.0  | 0.0 | 51008.0 | 1641.0 | 0.0 |
+|=============|==========|==========|======|======|======|==========|=========|=====|=========|========|=====|
+
+
+ℹ Text Metrics Statistics (Completed Requests)
+|=============|=======|=======|========|========|=======|=======|========|========|=======|=======|========|=========|
+| Benchmark   | Input Tokens                 |||| Input Words                  |||| Input Characters              ||||
+| Strategy    | Per Request  || Per Second     || Per Request  || Per Second     || Per Request  || Per Second      ||
+|             | Mdn   | p95   | Mdn    | Mean   | Mdn   | p95   | Mdn    | Mean   | Mdn   | p95   | Mdn    | Mean    |
+|-------------|-------|-------|--------|--------|-------|-------|--------|--------|-------|-------|--------|---------|
+| synchronous | 147.0 | 147.0 | 68.8   | 71.4   | 106.0 | 108.0 | 49.6   | 51.6   | 712.0 | 754.0 | 331.4  | 345.2   |
+| throughput  | 147.0 | 147.0 | 627.6  | 2799.7 | 106.0 | 108.0 | 448.1  | 2008.6 | 699.0 | 736.0 | 2938.9 | 13320.7 |
+| constant    | 147.0 | 147.0 | 746.4  | 755.5  | 106.0 | 108.0 | 535.7  | 543.4  | 701.0 | 738.0 | 3538.7 | 3603.4  |
+| constant    | 147.0 | 147.0 | 1331.2 | 1408.3 | 106.0 | 108.0 | 961.0  | 1010.2 | 699.0 | 738.0 | 6450.3 | 6704.8  |
+| constant    | 147.0 | 147.0 | 1833.6 | 2064.0 | 106.0 | 108.0 | 1326.0 | 1481.6 | 702.0 | 743.0 | 8906.2 | 9859.8  |
+|=============|=======|=======|========|========|=======|=======|========|========|=======|=======|========|=========|
+| Benchmark   | Output Tokens                |||| Output Words                 |||| Output Characters             ||||
+| Strategy    | Per Request  || Per Second     || Per Request  || Per Second     || Per Request  || Per Second      ||
+|             | Mdn   | p95   | Mdn    | Mean   | Mdn   | p95   | Mdn    | Mean   | Mdn   | p95   | Mdn    | Mean    |
+|-------------|-------|-------|--------|--------|-------|-------|--------|--------|-------|-------|--------|---------|
+| synchronous | 64.0  | 64.0  | 30.0   | 31.1   | 52.0  | 55.0  | 24.8   | 25.3   | 329.0 | 358.0 | 154.0  | 159.1   |
+| throughput  | 64.0  | 64.0  | 273.2  | 1218.9 | 52.0  | 56.0  | 213.4  | 989.9  | 320.0 | 361.0 | 1294.3 | 6110.1  |
+| constant    | 64.0  | 64.0  | 325.0  | 328.9  | 52.0  | 56.0  | 263.6  | 268.2  | 323.0 | 356.0 | 1621.7 | 1654.8  |
+| constant    | 64.0  | 64.0  | 579.6  | 613.1  | 52.0  | 56.0  | 484.8  | 497.1  | 320.0 | 359.0 | 3024.9 | 3067.8  |
+| constant    | 64.0  | 64.0  | 798.3  | 898.6  | 52.0  | 56.0  | 673.0  | 730.1  | 322.0 | 360.0 | 4218.5 | 4502.4  |
+|=============|=======|=======|========|========|=======|=======|========|========|=======|=======|========|=========|
+
+
+ℹ Request Token Statistics (Completed Requests)
+|=============|=======|=======|======|======|=======|=======|=======|=======|=========|========|
+| Benchmark   | Input Tok    || Output Tok || Total Tok    || Stream Iter  || Output Tok      ||
+| Strategy    | Per Req      || Per Req    || Per Req      || Per Req      || Per Stream Iter ||
+|             | Mdn   | p95   | Mdn  | p95  | Mdn   | p95   | Mdn   | p95   | Mdn     | p95    |
+|-------------|-------|-------|------|------|-------|-------|-------|-------|---------|--------|
+| synchronous | 147.0 | 147.0 | 64.0 | 64.0 | 211.0 | 211.0 | 134.0 | 134.0 | 1.0     | 1.0    |
+| throughput  | 147.0 | 147.0 | 64.0 | 64.0 | 211.0 | 211.0 | 134.0 | 134.0 | 1.0     | 1.0    |
+| constant    | 147.0 | 147.0 | 64.0 | 64.0 | 211.0 | 211.0 | 134.0 | 134.0 | 1.0     | 1.0    |
+| constant    | 147.0 | 147.0 | 64.0 | 64.0 | 211.0 | 211.0 | 134.0 | 134.0 | 1.0     | 1.0    |
+| constant    | 147.0 | 147.0 | 64.0 | 64.0 | 211.0 | 211.0 | 134.0 | 134.0 | 1.0     | 1.0    |
+|=============|=======|=======|======|======|=======|=======|=======|=======|=========|========|
+
+
+ℹ Request Latency Statistics (Completed Requests)
+|=============|=========|========|=========|=========|=======|=======|=======|=======|
+| Benchmark   | Request Latency || TTFT             || ITL          || TPOT         ||
+| Strategy    | Sec             || ms               || ms           || ms           ||
+|             | Mdn     | p95    | Mdn     | p95     | Mdn   | p95   | Mdn   | p95   |
+|-------------|---------|--------|---------|---------|-------|-------|-------|-------|
+| synchronous | 2.1     | 2.1    | 64.7    | 67.5    | 32.9  | 32.9  | 33.4  | 33.4  |
+| throughput  | 28.9    | 35.1   | 15428.7 | 21851.8 | 209.7 | 214.1 | 450.8 | 547.8 |
+| constant    | 2.6     | 3.2    | 116.7   | 135.7   | 39.2  | 49.6  | 40.4  | 50.5  |
+| constant    | 3.0     | 3.0    | 122.6   | 139.7   | 44.9  | 45.0  | 46.1  | 46.4  |
+| constant    | 3.8     | 3.8    | 156.3   | 175.3   | 57.1  | 57.1  | 58.6  | 58.9  |
+|=============|=========|========|=========|=========|=======|=======|=======|=======|
+
+
+ℹ Server Throughput Statistics (All Requests)
+|=============|======|======|=======|=======|========|========|=======|========|=======|========|
+| Benchmark   | Requests                 |||| Input Tokens   || Output Tokens || Total Tokens  ||
+| Strategy    | Per Sec    || Concurrency  || Per Sec        || Per Sec       || Per Sec       ||
+|             | Mdn  | Mean | Mdn   | Mean  | Mdn    | Mean   | Mdn   | Mean   | Mdn   | Mean   |
+|-------------|------|------|-------|-------|--------|--------|-------|--------|-------|--------|
+| synchronous | 0.5  | 0.5  | 1.0   | 1.0   | 68.8   | 71.3   | 30.4  | 30.0   | 30.4  | 98.7   |
+| throughput  | 0.3  | 14.2 | 512.0 | 508.9 | 616.4  | 3338.4 | 554.4 | 1107.5 | 586.8 | 4445.8 |
+| constant    | 5.1  | 4.8  | 13.0  | 13.0  | 746.6  | 740.3  | 85.6  | 315.2  | 89.4  | 1054.6 |
+| constant    | 9.0  | 9.1  | 28.0  | 27.6  | 1331.7 | 1411.4 | 121.5 | 599.5  | 124.4 | 2010.9 |
+| constant    | 12.4 | 13.3 | 53.0  | 51.3  | 1869.9 | 2085.8 | 180.6 | 878.2  | 184.8 | 2964.0 |
+|=============|======|======|=======|=======|========|========|=======|========|=======|========|
+
+
+
+✔ Benchmarking complete, generated 5 benchmark(s)
+…   json    : benchmarks/results/20260306_174220/vanilla_eager/benchmarks.json
+…   csv     : benchmarks/results/20260306_174220/vanilla_eager/benchmarks.csv

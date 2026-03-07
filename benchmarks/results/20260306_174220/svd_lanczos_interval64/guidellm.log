@@ -1,0 +1,26 @@
+✔ OpenAIHTTPBackend backend validated with model Qwen/Qwen2-7B-Instruct
+  {'target': 'http://localhost:8000', 'model': None, 'timeout': 60.0, 'http2': True, 'follow_redirects': True, 'verify': False, 'openai_paths': {'health': 'health', 'models':  
+  'v1/models', 'text_completions': 'v1/completions', 'chat_completions': 'v1/chat/completions', 'audio_transcriptions': 'v1/audio/transcriptions', 'audio_translations':        
+  'v1/audio/translations'}, 'validate_backend': {'method': 'GET', 'url': 'http://localhost:8000/health'}}                                                                       
+✔ Processor resolved
+  Using model 'Qwen/Qwen2-7B-Instruct' as processor                                                                                                                             
+✔ Request loader initialized with inf unique requests
+  {'data': "['prompt_tokens=128,output_tokens=64']", 'data_args': '[]', 'data_samples': -1, 'preprocessors': ['GenerativeColumnMapper',                                         
+  'GenerativeChatCompletionsRequestFormatter'], 'collator': 'GenerativeRequestCollator', 'sampler': 'None', 'num_workers': 1, 'random_seed': 42}                                
+✔ Resolved transient phase configurations
+  Warmup: percent=None value=None mode='prefer_duration'                                                                                                                        
+  Cooldown: percent=None value=None mode='prefer_duration'                                                                                                                      
+  Rampup (Throughput/Concurrent): 0.0                                                                                                                                           
+✔ SweepProfile profile resolved
+  {'str': "type_='sweep' completed_strategies=[] constraints={'max_seconds': 60.0} rampup_duration=0.0 sweep_size=5 strategy_type='constant' max_concurrency=None random_seed=42
+  synchronous_rate=-1.0 throughput_rate=-1.0 async_rates=[] measured_rates=[] strategy_types=['synchronous', 'throughput', 'constant', 'constant', 'constant']", 'type':        
+  'SweepProfile', 'class': 'SweepProfile', 'module': 'guidellm.benchmark.profiles', 'attributes': {'type_': 'sweep', 'completed_strategies': [], 'constraints': {'max_seconds': 
+  60.0}, 'rampup_duration': 0.0, 'sweep_size': 5, 'strategy_type': 'constant', 'max_concurrency': 'None', 'random_seed': 42, 'synchronous_rate': -1.0, 'throughput_rate': -1.0, 
+  'async_rates': [], 'measured_rates': []}}                                                                                                                                     
+✔ Output formats resolved
+  {'json': "output_path=PosixPath('benchmarks/results/20260306_174220/svd_lanczos_interval64')", 'csv':                                                                         
+  "output_path=PosixPath('benchmarks/results/20260306_174220/svd_lanczos_interval64')"}                                                                                         
+✔ Setup complete, starting benchmarks...
+
+
+

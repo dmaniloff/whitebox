@@ -1,0 +1,9 @@
+{
+  "model": "Qwen/Qwen2-7B-Instruct",
+  "name": "svd_lanczos_interval64",
+  "backend": "CUSTOM",
+  "enforce_eager": true,
+  "svd_interval": 64,
+  "svd_rank": 4,
+  "svd_method": "lanczos"
+}

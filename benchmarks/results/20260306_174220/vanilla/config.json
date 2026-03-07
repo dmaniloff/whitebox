@@ -1,0 +1,9 @@
+{
+  "model": "Qwen/Qwen2-7B-Instruct",
+  "name": "vanilla",
+  "backend": "TRITON_ATTN",
+  "enforce_eager": false,
+  "svd_interval": null,
+  "svd_rank": null,
+  "svd_method": null
+}

@@ -1,0 +1,9 @@
+{
+  "model": "Qwen/Qwen2-7B-Instruct",
+  "name": "svd_rank8_interval64",
+  "backend": "CUSTOM",
+  "enforce_eager": true,
+  "svd_interval": 64,
+  "svd_rank": 8,
+  "svd_method": null
+}
