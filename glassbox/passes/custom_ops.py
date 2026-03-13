@@ -9,7 +9,7 @@ from typing import Tuple
 
 import torch
 
-from .svd import matvec_S, matvec_ST, randomized_svd, svd_via_lanczos
+from ..svd import matvec_S, matvec_ST, randomized_svd, svd_via_lanczos
 
 
 # Register a custom torch operation for capturing QKV values before attention

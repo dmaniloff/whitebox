@@ -20,7 +20,7 @@ See `glassbox/backends/svd_backend.py` for the implementation and `glassbox/svd.
 
 ```bash
 GLASSBOX_SVD_INTERVAL=16 GLASSBOX_SVD_RANK=2 \
-  python -m glassbox.svd_backend_runner
+  python -m glassbox.backends.runner
 ```
 
 #### Configuration

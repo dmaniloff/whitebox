@@ -139,7 +139,7 @@ Plan: Custom vLLM Attention Backend for Matrix-Free SVD
  - GLASSBOX_SVD_METHOD — "randomized" or "lanczos" (default: "randomized")
  - GLASSBOX_SVD_HEADS — JSON list of head indices, e.g. '[0,1,2]' (default: [0])
 
- File 2: glassbox/svd_backend_runner.py
+ File 2: glassbox/backends/runner.py
 
  Entry-point script that:
  1. Imports glassbox.svd_backend (triggers @register_backend)
@@ -157,7 +157,7 @@ Plan: Custom vLLM Attention Backend for Matrix-Free SVD
 
 ```bash
  $ cd /home/ubuntu/src/whitebox
- $ GLASSBOX_SVD_INTERVAL=16 GLASSBOX_SVD_RANK=2 python -m glassbox.svd_backend_runner
+ $ GLASSBOX_SVD_INTERVAL=16 GLASSBOX_SVD_RANK=2 python -m glassbox.backends.runner
 ```
 
  Expected: normal generation output, plus log lines like:
@@ -319,7 +319,7 @@ The Q buffer is the dominant memory cost and scales as O(layers × L × H × d).
  Cleaned up Output:
 
  ```
- $ GLASSBOX_SVD_INTERVAL=16 GLASSBOX_SVD_RANK=2 /opt/pytorch/bin/python -m glassbox.svd_backend_runner
+ $ GLASSBOX_SVD_INTERVAL=16 GLASSBOX_SVD_RANK=2 /opt/pytorch/bin/python -m glassbox.backends.runner
 
  step=16  L=22  (7 prompt + 15 decode)
  [SVD] layer.0  head=0 [166.76, 84.71]    σ₁/σ₂ = 1.97

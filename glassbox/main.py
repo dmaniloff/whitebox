@@ -21,7 +21,7 @@ from docopt import docopt
 from vllm import LLM, SamplingParams
 from vllm.config import CompilationConfig
 
-from . import custom_ops  # noqa: F401 - Register custom ops
+from .passes import custom_ops  # noqa: F401 - Register custom ops
 from .config import config
 from .passes import BeforeAttentionInjector, PostAttentionInjector
 
