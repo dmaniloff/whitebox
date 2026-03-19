@@ -10,82 +10,140 @@ import torch
 
 
 def matvec_S(Q, K, v):
-    """Calculate Sv = Q K^T v in two passes."""
+    """Calculate Sv = Q K^T v in two O(Ld) passes, avoid computing S: [L, L]."""
     # v: [L], Q,K: [L, d]
-    # compute K^T v
     z = K.T @ v  # [d]
-    # compute Q z
     return Q @ z  # [L]
 
 
 def matvec_ST(Q, K, u):
-    """Calculate S^T u = K Q^T u in two passes."""
+    """Calculate S^T u = K Q^T u in two O(Ld) passes, avoid computing S^T: [L, L]."""
+    # u: [L], Q,K: [L, d]
     z = Q.T @ u  # [d]
     return K @ z  # [L]
 
 
-def matvec_A(x):
-    """This is attention @ x."""
-    pass
+def apply_A_blocked(Q, K, v, scale, block_size=256):
+    """A @ v via blocked row-streaming. Peak memory: O(block_size * L_k)."""
+    L_q = Q.shape[0]
+    result = torch.zeros(L_q, device=Q.device, dtype=Q.dtype)
+    for i0 in range(0, L_q, block_size):
+        i1 = min(i0 + block_size, L_q)
+        scores = Q[i0:i1] @ K.T * scale  # [bs, L_k]
+        attn = torch.softmax(scores, dim=-1)  # [bs, L_k]
+        result[i0:i1] = attn @ v  # [bs]
+    return result
 
 
-def matvec_AT(x):
-    """This is attention^T @ x."""
-    pass
+def apply_AT_blocked(Q, K, u, scale, block_size=256):
+    """A^T @ u via blocked row-streaming."""
+    L_k = K.shape[0]
+    result = torch.zeros(L_k, device=K.device, dtype=K.dtype)
+    for i0 in range(0, Q.shape[0], block_size):
+        i1 = min(i0 + block_size, Q.shape[0])
+        scores = Q[i0:i1] @ K.T * scale
+        attn = torch.softmax(scores, dim=-1)  # [bs, L_k]
+        result += attn.T @ u[i0:i1]  # [L_k]
+    return result
 
 
-def compute_degree_normalized_M(A, epsilon=1e-8):
+def compute_dk_blocked(Q, K, scale, block_size=256, epsilon=1e-10):
+    """Compute D_K (column sums of A) via apply_AT_blocked.
+
+    Uses Moore-Penrose pseudoinverse: zero-degree positions get 0 instead of
+    large values.
     """
-    Compute the degree-normalized cross-operator M from attention matrix A.
+    ones = torch.ones(Q.shape[0], device=Q.device, dtype=Q.dtype)
+    d_k = apply_AT_blocked(Q, K, ones, scale, block_size)
+    d_k_inv_sqrt = torch.where(
+        d_k > epsilon, 1.0 / torch.sqrt(d_k), torch.zeros_like(d_k)
+    )
+    return d_k, d_k_inv_sqrt
 
-    Following SHADE paper Section 3.2.2, Equation 1:
-    M = D_Q^{-1/2} @ A @ D_K^{-1/2}
+
+def compute_logsumexp_blocked(Q, K, scale, block_size=256):
+    """Precompute lse[i] = logsumexp(Q_i . K^T * scale) for all rows."""
+    L_q = Q.shape[0]
+    lse = torch.zeros(L_q, device=Q.device, dtype=Q.dtype)
+    for i0 in range(0, L_q, block_size):
+        i1 = min(i0 + block_size, L_q)
+        scores = Q[i0:i1] @ K.T * scale  # [bs, L_k]
+        lse[i0:i1] = torch.logsumexp(scores, dim=-1)
+    return lse
+
+
+def get_M_entries_batch(Q, K, lse, d_k_inv_sqrt, scale, ii, jj):
+    """Compute M[ii, jj] on the fly. O(N*d) cost."""
+    scores = (Q[ii] * K[jj]).sum(dim=-1) * scale  # [N]
+    A_ij = torch.exp(scores - lse[ii])  # [N]
+    return A_ij * d_k_inv_sqrt[jj]  # [N]
+
+
+def matvec_M_blocked(Q, K, x, d_k_inv_sqrt, scale, block_size=256):
+    """M @ x = A @ (D_K^{-1/2} * x). D_Q^{-1/2} = I for row-stochastic A."""
+    return apply_A_blocked(Q, K, d_k_inv_sqrt * x, scale, block_size)
+
+
+def matvec_MT_blocked(Q, K, x, d_k_inv_sqrt, scale, block_size=256):
+    """M^T @ x = D_K^{-1/2} * (A^T @ x)."""
+    return d_k_inv_sqrt * apply_AT_blocked(Q, K, x, scale, block_size)
+
+
+def compute_M_fro_norm_blocked(Q, K, d_k_inv_sqrt, scale, block_size=256):
+    """Compute ||M||_F without materializing M."""
+    L_q = Q.shape[0]
+    norm_sq = torch.tensor(0.0, device=Q.device, dtype=Q.dtype)
+    for i0 in range(0, L_q, block_size):
+        i1 = min(i0 + block_size, L_q)
+        scores = Q[i0:i1] @ K.T * scale
+        attn = torch.softmax(scores, dim=-1)  # [bs, L_k]
+        M_block = attn * d_k_inv_sqrt.unsqueeze(0)  # broadcast [bs, L_k]
+        norm_sq = norm_sq + (M_block**2).sum()
+    return torch.sqrt(norm_sq)
+
+
+def compute_degree_normalized_M(A, epsilon=1e-10):
+    """
+    Compute the degree-normalized cross-operator M from attention matrix A (materialized version).
+
+    SHADE paper (Section 3.2.2, Equation 1): M = D_Q^{-1/2} @ A @ D_K^{-1/2}.
+    M is a matrix whose structure reflects the pattern of information routing independent of degree heterogeneity,
+    making spectral properties (singular values, asymmetry) comparable across heads and layers.
 
     Args:
         A: Attention matrix of shape (n_q, n_k)
-        epsilon: Small value for numerical stability (default: 1e-8)
+        epsilon: Threshold below which degrees are treated as zero (default: 1e-10)
 
     Returns:
         M: Degree-normalized cross-operator of shape (n_q, n_k)
-        d_q_inv_sqrt: Inverse sqrt of query degree vector d_q^{-1/2} of shape (n_q,)
-        d_k_inv_sqrt: Inverse sqrt of key degree vector d_k^{-1/2} of shape (n_k,)
+        d_q_inv_sqrt: Inverse sqrt of query degree vector of shape (n_q,)
+        d_k_inv_sqrt: Inverse sqrt of key degree vector of shape (n_k,)
     """
     # Compute row sums (query degrees): d_Q_i = sum_j A_ij
-    d_q = A.sum(dim=1)  # shape: (n_q,); if A is softmax over rows, then D_Q = I
+    # shape: (n_q,); if A is softmax over rows, then D_Q = I
+    d_q = A.sum(dim=1)
 
     # Compute column sums (key degrees): d_K_j = sum_i A_ij
-    d_k = A.sum(
-        dim=0
-    )  # shape: (n_k,); in a real implementation, get the column degrees with a call to matvec_AT on an all‑ones vector.
+    # shape: (n_k,)
+    d_k = A.sum(dim=0)
 
-    # Compute inverse sqrt degree *vectors* (we only need elementwise scaling for matvecs).
-    d_q_inv_sqrt = 1.0 / torch.sqrt(d_q + epsilon)  # (n_q,)
-    d_k_inv_sqrt = 1.0 / torch.sqrt(d_k + epsilon)  # (n_k,)
+    # Moore-Penrose pseudoinverse: zero out near-zero degrees
+    d_q_inv_sqrt = torch.where(
+        d_q > epsilon, 1.0 / torch.sqrt(d_q), torch.zeros_like(d_q)
+    )
+    d_k_inv_sqrt = torch.where(
+        d_k > epsilon, 1.0 / torch.sqrt(d_k), torch.zeros_like(d_k)
+    )
 
-    # Explicit M (optional / for debugging)
     M = (d_q_inv_sqrt[:, None] * A) * d_k_inv_sqrt[None, :]
 
     return M, d_q_inv_sqrt, d_k_inv_sqrt
 
 
-def matvec_M(x, d_q_inv_sqrt, d_k_inv_sqrt):
-    # diag-scale input (d*_inv_sqrt are vectors)
-    x1 = d_k_inv_sqrt * x  # [L]
-    y1 = matvec_A(x1)  # attention @ x1   (FlashAttn-like run with dv=1)
-    y = d_q_inv_sqrt * y1  # [L]
-    return y
-
-
-def matvec_MT(x, d_q_inv_sqrt, d_k_inv_sqrt):
-    x1 = d_q_inv_sqrt * x
-    y1 = matvec_AT(x1)
-    y = d_k_inv_sqrt * y1
-    return y
-
-
-def matvec_B(x, d_q_inv_sqrt, d_k_inv_sqrt):
-    y = matvec_M(x, d_q_inv_sqrt, d_k_inv_sqrt)
-    return matvec_MT(y, d_q_inv_sqrt, d_k_inv_sqrt)
+def matvec_B_blocked(Q, K, x, d_k_inv_sqrt, scale, block_size=256):
+    """B @ x = M^T @ (M @ x)."""
+    y = matvec_M_blocked(Q, K, x, d_k_inv_sqrt, scale, block_size)
+    return matvec_MT_blocked(Q, K, y, d_k_inv_sqrt, scale, block_size)
 
 
 def randomized_svd(matvec, matvec_t, dim, k, p=5, q=2, device="cuda"):
@@ -132,18 +190,14 @@ def randomized_svd(matvec, matvec_t, dim, k, p=5, q=2, device="cuda"):
     # Optional: power iterations to improve spectral separation.
     for _ in range(q):
         Z = torch.stack([matvec_t(Y[:, i]) for i in range(k + p)], dim=1)  # M^T Y
-        Y = torch.stack(
-            [matvec(Z[:, i]) for i in range(k + p)], dim=1
-        )  # M (M^T Y)
+        Y = torch.stack([matvec(Z[:, i]) for i in range(k + p)], dim=1)  # M (M^T Y)
 
     # Step 3: orthonormal basis Q for range(Y)
     Q, _ = torch.linalg.qr(Y, mode="reduced")  # (dim, k+p)
 
     # Step 4: form small matrix B = Q^T M  (shape (k+p, dim))
     # We can compute B via B^T = M^T Q, using matvec_t.
-    Bt = torch.stack(
-        [matvec_t(Q[:, i]) for i in range(k + p)], dim=1
-    )  # (dim, k+p)
+    Bt = torch.stack([matvec_t(Q[:, i]) for i in range(k + p)], dim=1)  # (dim, k+p)
     B = Bt.T  # (k+p, dim)
 
     # Step 5: SVD of small B
@@ -344,5 +398,3 @@ def compare_svd_results(matvec, matvec_t, U1, S1, V1, U2, S2, V2, trials: int = 
         "recon_method_diff_mean": recon[:, 2].mean().item(),
         "recon_method_diff_max": recon[:, 2].max().item(),
     }
-
-

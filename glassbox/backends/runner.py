@@ -59,6 +59,47 @@ logger = logging.getLogger(__name__)
     help="Head indices to analyze (repeatable). [default: from config ([0])]",
 )
 @click.option(
+    "--operator",
+    type=click.Choice(["S", "M"]),
+    default=None,
+    help="Operator to SVD: S=scores, M=degree-normalized. [default: from config (S)]",
+)
+@click.option(
+    "--threshold",
+    type=int,
+    default=None,
+    help="Sequence length threshold for materialized vs matrix-free. [default: from config (2048)]",
+)
+@click.option(
+    "--block-size",
+    type=int,
+    default=None,
+    help="Block size for blocked-streaming matvecs. [default: from config (256)]",
+)
+@click.option(
+    "--hodge/--no-hodge",
+    default=None,
+    help="Compute Hodge decomposition features. [default: from config (False)]",
+)
+@click.option(
+    "--hodge-target-cv",
+    type=float,
+    default=None,
+    help="Target CV for adaptive curl sampling. [default: from config (0.05)]",
+)
+@click.option(
+    "--hodge-curl-seed",
+    type=int,
+    default=None,
+    help="Seed for curl triangle sampling. [default: from config (42)]",
+)
+@click.option(
+    "--output",
+    type=click.Path(),
+    default=None,
+    help="JSONL output file path. [default: from config (log to stderr)]",
+)
+@click.option(
     "--max-tokens",
     type=int,
     default=64,
@@ -77,6 +118,13 @@ def main(
     rank: int | None,
     method: str | None,
     heads: tuple[int, ...],
+    output: str | None,
+    operator: str | None,
+    threshold: int | None,
+    block_size: int | None,
+    hodge: bool | None,
+    hodge_target_cv: float | None,
+    hodge_curl_seed: int | None,
     max_tokens: int,
     prompt: str,
 ) -> None:
@@ -92,6 +140,20 @@ def main(
         overrides["method"] = method
     if heads:
         overrides["heads"] = list(heads)
+    if output is not None:
+        overrides["output"] = output
+    if operator is not None:
+        overrides["operator"] = operator
+    if threshold is not None:
+        overrides["threshold"] = threshold
+    if block_size is not None:
+        overrides["block_size"] = block_size
+    if hodge is not None:
+        overrides["hodge"] = hodge
+    if hodge_target_cv is not None:
+        overrides["hodge_target_cv"] = hodge_target_cv
+    if hodge_curl_seed is not None:
+        overrides["hodge_curl_seed"] = hodge_curl_seed
 
     # vLLM calls impl_cls(). There doesn't seem to be a way to inject extra args through the vLLM call path.
     # So we set the config as a class variable on SVDTritonAttentionImpl before vLLM creates the engine.

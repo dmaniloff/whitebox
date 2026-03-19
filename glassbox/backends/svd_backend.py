@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 from dataclasses import dataclass, field
 from typing import IO, Literal
@@ -34,7 +35,21 @@ from vllm.v1.attention.backends.triton_attn import (
     TritonAttentionMetadata,
 )
 
-from glassbox.svd import matvec_S, matvec_ST, randomized_svd, svd_via_lanczos
+from glassbox.hodge import (
+    compute_routing_features_materialized,
+    compute_routing_features_matrix_free,
+)
+from glassbox.svd import (
+    compute_degree_normalized_M,
+    compute_dk_blocked,
+    compute_logsumexp_blocked,
+    matvec_M_blocked,
+    matvec_MT_blocked,
+    matvec_S,
+    matvec_ST,
+    randomized_svd,
+    svd_via_lanczos,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +75,12 @@ class SVDConfig(BaseSettings):
     method: Literal["randomized", "lanczos"] = "randomized"
     heads: list[int] = [0]  # JSON list in env, e.g. GLASSBOX_SVD_HEADS='[0,1,2]'
     output: str | None = None  # JSONL output path; falls back to logger.info if unset
+    operator: Literal["S", "M"] = "S"  # S = scores matrix, M = degree-normalized
+    threshold: int = 2048  # L <= threshold: materialize; L > threshold: matrix-free
+    block_size: int = 256  # block size for blocked-streaming matvecs
+    hodge: bool = False  # compute Hodge decomposition features
+    hodge_target_cv: float = 0.05  # target CV for adaptive curl sampling
+    hodge_curl_seed: int = 42  # seed for curl triangle sampling
 
 
 @dataclass
@@ -271,54 +292,167 @@ class SVDTritonAttentionImpl(TritonAttentionImpl):
             Qh = Q_all[:, head_idx, :]  # [L, d]
             Kh = K_all[:, kv_head_idx, :]  # [L, d]
 
-            device = Qh.device
-            matvec = lambda v, Q=Qh, K=Kh: matvec_S(Q, K, v)
-            matvec_t = lambda u, Q=Qh, K=Kh: matvec_ST(Q, K, u)
+            if self.config.operator == "S":
+                self._run_svd_scores(layer_name, layer_idx, state, head_idx, Qh, Kh, L)
+            else:
+                self._run_svd_normalized(
+                    layer_name, layer_idx, state, head_idx, Qh, Kh, L
+                )
 
-            k = min(self.config.rank, L - 1)
+    def _run_svd_scores(
+        self,
+        layer_name: str,
+        layer_idx: int | None,
+        state: PerLayerSVDState,
+        head_idx: int,
+        Qh: torch.Tensor,
+        Kh: torch.Tensor,
+        L: int,
+    ) -> None:
+        """SVD of the scores matrix S = QK^T."""
+        device = Qh.device
+        matvec = lambda v, Q=Qh, K=Kh: matvec_S(Q, K, v)
+        matvec_t = lambda u, Q=Qh, K=Kh: matvec_ST(Q, K, u)
+
+        k = min(self.config.rank, L - 1)
+
+        if self.config.method == "lanczos":
+            _, S, _ = svd_via_lanczos(
+                matvec=matvec,
+                matvec_t=matvec_t,
+                dim=L,
+                k=k,
+                iters=max(2 * k + 2, 20),
+                device=str(device),
+            )
+        else:
+            _, S, _ = randomized_svd(
+                matvec=matvec,
+                matvec_t=matvec_t,
+                dim=L,
+                k=k,
+                device=str(device),
+            )
+
+        self._emit_result(layer_name, layer_idx, state, head_idx, L, S.cpu().tolist())
+
+    def _run_svd_normalized(
+        self,
+        layer_name: str,
+        layer_idx: int | None,
+        state: PerLayerSVDState,
+        head_idx: int,
+        Qh: torch.Tensor,
+        Kh: torch.Tensor,
+        L: int,
+    ) -> None:
+        """SVD of the degree-normalized cross-operator M."""
+        scale = 1.0 / math.sqrt(Qh.shape[1])
+        k = min(self.config.rank, L - 1)
+
+        if L <= self.config.threshold:
+            # TIER 1: materialize
+            A = torch.softmax(Qh @ Kh.T * scale, dim=-1)
+            M, _, d_k_inv_sqrt = compute_degree_normalized_M(A)
+            sigma = torch.linalg.svdvals(M)
+            sv_list = sigma[:k].cpu().tolist()
+            tier = "materialized"
+            hodge = (
+                compute_routing_features_materialized(
+                    M,
+                    k,
+                    self.config.method,
+                    self.config.hodge_target_cv,
+                    self.config.hodge_curl_seed,
+                )
+                if self.config.hodge
+                else {}
+            )
+        else:
+            # TIER 2: matrix-free
+            _, d_k_inv_sqrt = compute_dk_blocked(Qh, Kh, scale, self.config.block_size)
+            device = Qh.device
+            matvec = lambda v: matvec_M_blocked(
+                Qh, Kh, v, d_k_inv_sqrt, scale, self.config.block_size
+            )
+            matvec_t = lambda u: matvec_MT_blocked(
+                Qh, Kh, u, d_k_inv_sqrt, scale, self.config.block_size
+            )
 
             if self.config.method == "lanczos":
                 _, S, _ = svd_via_lanczos(
-                    matvec=matvec,
-                    matvec_t=matvec_t,
-                    dim=L,
-                    k=k,
-                    iters=max(2 * k + 2, 20),
-                    device=str(device),
+                    matvec, matvec_t, L, k, max(2 * k + 2, 20), str(device)
                 )
             else:
-                _, S, _ = randomized_svd(
-                    matvec=matvec,
-                    matvec_t=matvec_t,
-                    dim=L,
-                    k=k,
-                    device=str(device),
-                )
+                _, S, _ = randomized_svd(matvec, matvec_t, L, k, device=str(device))
 
             sv_list = S.cpu().tolist()
+            tier = "matrix_free"
 
-            if self.config.output:
-                cls = type(self)
-                if cls._output_fh is None:
-                    cls._output_fh = open(self.config.output, "a")
-                row = {
-                    "request_id": cls.req_tracker.request_id,
-                    "layer": layer_name,
-                    "layer_idx": layer_idx,  # None if layer_name didn't match regex
-                    "head": head_idx,
-                    "step": state.step,
-                    "L": L,
-                    "singular_values": sv_list,
-                }
-                cls._output_fh.write(json.dumps(row) + "\n")
-                cls._output_fh.flush()
-            else:
-                logger.info(
-                    "[SVD] %s head=%d step=%d L=%d top-%d singular values: %s",
-                    layer_name,
-                    head_idx,
-                    state.step,
-                    L,
+            if self.config.hodge:
+                lse = compute_logsumexp_blocked(Qh, Kh, scale, self.config.block_size)
+                hodge = compute_routing_features_matrix_free(
+                    Qh,
+                    Kh,
+                    d_k_inv_sqrt,
+                    scale,
+                    lse,
                     k,
-                    sv_list,
+                    self.config.method,
+                    self.config.block_size,
+                    self.config.hodge_target_cv,
+                    self.config.hodge_curl_seed,
                 )
+            else:
+                hodge = {}
+
+        self._emit_result(
+            layer_name, layer_idx, state, head_idx, L, sv_list, hodge, tier
+        )
+
+    def _emit_result(
+        self,
+        layer_name: str,
+        layer_idx: int | None,
+        state: PerLayerSVDState,
+        head_idx: int,
+        L: int,
+        sv_list: list[float],
+        hodge: dict | None = None,
+        tier: str | None = None,
+    ) -> None:
+        """Write SVD results to JSONL or log."""
+        cls = type(self)
+        k = len(sv_list)
+
+        if self.config.output:
+            if cls._output_fh is None:
+                cls._output_fh = open(self.config.output, "a")
+            row: dict = {
+                "request_id": cls.req_tracker.request_id,
+                "layer": layer_name,
+                "layer_idx": layer_idx,
+                "head": head_idx,
+                "step": state.step,
+                "L": L,
+                "singular_values": sv_list,
+            }
+            if self.config.operator == "M":
+                row["operator"] = "M"
+                row["tier"] = tier
+                if hodge:
+                    row["hodge"] = hodge
+            cls._output_fh.write(json.dumps(row) + "\n")
+            cls._output_fh.flush()
+        else:
+            logger.info(
+                "[SVD] %s head=%d step=%d L=%d top-%d singular values: %s",
+                layer_name,
+                head_idx,
+                state.step,
+                L,
+                k,
+                sv_list,
+            )
+            if hodge:
+                logger.info("[SVD] %s head=%d hodge=%s", layer_name, head_idx, hodge)
