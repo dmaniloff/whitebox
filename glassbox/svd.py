@@ -10,16 +10,15 @@ import torch
 
 
 def matvec_S(Q, K, v):
-    """Calculate Sv = Q K^T v in two passes."""
+    """Calculate Sv = Q K^T v in two O(Ld) passes, avoid computing S: [L, L]."""
     # v: [L], Q,K: [L, d]
-    # compute K^T v
     z = K.T @ v  # [d]
-    # compute Q z
     return Q @ z  # [L]
 
 
 def matvec_ST(Q, K, u):
-    """Calculate S^T u = K Q^T u in two passes."""
+    """Calculate S^T u = K Q^T u in two O(Ld) passes, avoid computing S^T: [L, L]."""
+    # u: [L], Q,K: [L, d]
     z = Q.T @ u  # [d]
     return K @ z  # [L]
 
@@ -30,9 +29,9 @@ def apply_A_blocked(Q, K, v, scale, block_size=256):
     result = torch.zeros(L_q, device=Q.device, dtype=Q.dtype)
     for i0 in range(0, L_q, block_size):
         i1 = min(i0 + block_size, L_q)
-        scores = Q[i0:i1] @ K.T * scale          # [bs, L_k]
-        attn = torch.softmax(scores, dim=-1)       # [bs, L_k]
-        result[i0:i1] = attn @ v                   # [bs]
+        scores = Q[i0:i1] @ K.T * scale  # [bs, L_k]
+        attn = torch.softmax(scores, dim=-1)  # [bs, L_k]
+        result[i0:i1] = attn @ v  # [bs]
     return result
 
 
@@ -43,8 +42,8 @@ def apply_AT_blocked(Q, K, u, scale, block_size=256):
     for i0 in range(0, Q.shape[0], block_size):
         i1 = min(i0 + block_size, Q.shape[0])
         scores = Q[i0:i1] @ K.T * scale
-        attn = torch.softmax(scores, dim=-1)       # [bs, L_k]
-        result += attn.T @ u[i0:i1]                # [L_k]
+        attn = torch.softmax(scores, dim=-1)  # [bs, L_k]
+        result += attn.T @ u[i0:i1]  # [L_k]
     return result
 
 
@@ -62,16 +61,16 @@ def compute_logsumexp_blocked(Q, K, scale, block_size=256):
     lse = torch.zeros(L_q, device=Q.device, dtype=Q.dtype)
     for i0 in range(0, L_q, block_size):
         i1 = min(i0 + block_size, L_q)
-        scores = Q[i0:i1] @ K.T * scale          # [bs, L_k]
+        scores = Q[i0:i1] @ K.T * scale  # [bs, L_k]
         lse[i0:i1] = torch.logsumexp(scores, dim=-1)
     return lse
 
 
 def get_M_entries_batch(Q, K, lse, d_k_inv_sqrt, scale, ii, jj):
     """Compute M[ii, jj] on the fly. O(N*d) cost."""
-    scores = (Q[ii] * K[jj]).sum(dim=-1) * scale   # [N]
-    A_ij = torch.exp(scores - lse[ii])              # [N]
-    return A_ij * d_k_inv_sqrt[jj]                  # [N]
+    scores = (Q[ii] * K[jj]).sum(dim=-1) * scale  # [N]
+    A_ij = torch.exp(scores - lse[ii])  # [N]
+    return A_ij * d_k_inv_sqrt[jj]  # [N]
 
 
 def matvec_M_blocked(Q, K, x, d_k_inv_sqrt, scale, block_size=256):
@@ -91,18 +90,19 @@ def compute_M_fro_norm_blocked(Q, K, d_k_inv_sqrt, scale, block_size=256):
     for i0 in range(0, L_q, block_size):
         i1 = min(i0 + block_size, L_q)
         scores = Q[i0:i1] @ K.T * scale
-        attn = torch.softmax(scores, dim=-1)       # [bs, L_k]
+        attn = torch.softmax(scores, dim=-1)  # [bs, L_k]
         M_block = attn * d_k_inv_sqrt.unsqueeze(0)  # broadcast [bs, L_k]
-        norm_sq = norm_sq + (M_block ** 2).sum()
+        norm_sq = norm_sq + (M_block**2).sum()
     return torch.sqrt(norm_sq)
 
 
 def compute_degree_normalized_M(A, epsilon=1e-8):
     """
-    Compute the degree-normalized cross-operator M from attention matrix A.
+    Compute the degree-normalized cross-operator M from attention matrix A (materialized version).
 
-    Following SHADE paper Section 3.2.2, Equation 1:
-    M = D_Q^{-1/2} @ A @ D_K^{-1/2}
+    SHADE paper (Section 3.2.2, Equation 1): M = D_Q^{-1/2} @ A @ D_K^{-1/2}.
+    M is a matrix whose structure reflects the pattern of information routing independent of degree heterogeneity,
+    making spectral properties (singular values, asymmetry) comparable across heads and layers.
 
     Args:
         A: Attention matrix of shape (n_q, n_k)
@@ -181,18 +181,14 @@ def randomized_svd(matvec, matvec_t, dim, k, p=5, q=2, device="cuda"):
     # Optional: power iterations to improve spectral separation.
     for _ in range(q):
         Z = torch.stack([matvec_t(Y[:, i]) for i in range(k + p)], dim=1)  # M^T Y
-        Y = torch.stack(
-            [matvec(Z[:, i]) for i in range(k + p)], dim=1
-        )  # M (M^T Y)
+        Y = torch.stack([matvec(Z[:, i]) for i in range(k + p)], dim=1)  # M (M^T Y)
 
     # Step 3: orthonormal basis Q for range(Y)
     Q, _ = torch.linalg.qr(Y, mode="reduced")  # (dim, k+p)
 
     # Step 4: form small matrix B = Q^T M  (shape (k+p, dim))
     # We can compute B via B^T = M^T Q, using matvec_t.
-    Bt = torch.stack(
-        [matvec_t(Q[:, i]) for i in range(k + p)], dim=1
-    )  # (dim, k+p)
+    Bt = torch.stack([matvec_t(Q[:, i]) for i in range(k + p)], dim=1)  # (dim, k+p)
     B = Bt.T  # (k+p, dim)
 
     # Step 5: SVD of small B
@@ -393,5 +389,3 @@ def compare_svd_results(matvec, matvec_t, U1, S1, V1, U2, S2, V2, trials: int = 
         "recon_method_diff_mean": recon[:, 2].mean().item(),
         "recon_method_diff_max": recon[:, 2].max().item(),
     }
-
-
