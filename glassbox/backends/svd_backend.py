@@ -1,17 +1,15 @@
 """
 Custom vLLM attention backend that wraps Triton attention to perform
-matrix-free SVD of the scores matrix S = Q K^T at configurable intervals.
+matrix-free SVD of attention matrices at configurable intervals.
 
 Usage:
     1. Import this module (triggers @register_backend)
     2. Launch vLLM with attention_backend="CUSTOM", enforce_eager=True
 
-Configuration via env vars or .env file (see SVDConfig):
-    GLASSBOX_SVD_INTERVAL  - run SVD every N decode steps (default: 32)
-    GLASSBOX_SVD_RANK      - number of singular values to compute (default: 4)
-    GLASSBOX_SVD_METHOD    - "randomized" or "lanczos" (default: "randomized")
-    GLASSBOX_SVD_HEADS     - JSON list of head indices (default: '[0]', e.g. '[0,1,2]')
-    GLASSBOX_SVD_OUTPUT    - path to JSONL output file for structured SVD results (optional)
+Configuration via GlassboxConfig (see glassbox/config.py):
+    - glassbox.yaml (primary)
+    - Legacy GLASSBOX_SVD_* env vars (deprecated, auto-migrated)
+    - Programmatic kwargs
 """
 
 from __future__ import annotations
@@ -21,10 +19,9 @@ import logging
 import math
 import re
 from dataclasses import dataclass, field
-from typing import IO, Literal
+from typing import IO
 
 import torch
-from pydantic_settings import BaseSettings, SettingsConfigDict
 from vllm.v1.attention.backends.registry import (
     AttentionBackendEnum,
     register_backend,
@@ -35,6 +32,7 @@ from vllm.v1.attention.backends.triton_attn import (
     TritonAttentionMetadata,
 )
 
+from glassbox.config import GlassboxConfig
 from glassbox.hodge import (
     compute_routing_features_materialized,
     compute_routing_features_matrix_free,
@@ -57,30 +55,6 @@ logger = logging.getLogger(__name__)
 #   OPT/Qwen/Llama: "model.layers.0.self_attn"
 #   GPT-2:          "transformer.h.0.attn.attn"
 _LAYER_IDX_RE = re.compile(r"(?:layers|\.h)\.(\d+)")
-
-
-class SVDConfig(BaseSettings):
-    """Configuration for the SVD backend. Immutable after creation."""
-
-    model_config = SettingsConfigDict(
-        env_prefix="GLASSBOX_SVD_",
-        env_file=".env",
-        env_file_encoding="utf-8",
-        extra="ignore",
-        frozen=True,
-    )
-
-    interval: int = 32
-    rank: int = 4
-    method: Literal["randomized", "lanczos"] = "randomized"
-    heads: list[int] = [0]  # JSON list in env, e.g. GLASSBOX_SVD_HEADS='[0,1,2]'
-    output: str | None = None  # JSONL output path; falls back to logger.info if unset
-    operator: Literal["S", "M"] = "S"  # S = scores matrix, M = degree-normalized
-    threshold: int = 2048  # L <= threshold: materialize; L > threshold: matrix-free
-    block_size: int = 256  # block size for blocked-streaming matvecs
-    hodge: bool = False  # compute Hodge decomposition features
-    hodge_target_cv: float = 0.05  # target CV for adaptive curl sampling
-    hodge_curl_seed: int = 42  # seed for curl triangle sampling
 
 
 @dataclass
@@ -125,7 +99,7 @@ class SVDTritonAttentionImpl(TritonAttentionImpl):
     # Class-level config; immutable after creation.
     # If you need to override, set it before vLLM creates the engine.
     # vLLM controls the constructor signature so we can't pass it in.
-    config: SVDConfig = SVDConfig()
+    config: GlassboxConfig = GlassboxConfig()
 
     # Class-level layer state; shared mutable.
     # Shared by all impl instances (one per layer or shared).
@@ -170,6 +144,10 @@ class SVDTritonAttentionImpl(TritonAttentionImpl):
         if attn_metadata is None:
             return result
 
+        # Skip if no signals enabled
+        if not (self.config.spectral.enabled or self.config.degree_normalized.enabled):
+            return result
+
         # 3. Accumulate Q for the first sequence in the batch
         layer_name = getattr(layer, "layer_name", None)
         if layer_name is None:
@@ -205,10 +183,21 @@ class SVDTritonAttentionImpl(TritonAttentionImpl):
         state.q_buffer.append(query[q_start:q_end].detach().clone())
         state.step += 1
 
-        # 4. Every self.config.interval steps, extract K and run SVD
-        if state.step % self.config.interval == 0:
+        # 4. Check per-signal intervals and run SVD
+        spectral_due = (
+            self.config.spectral.enabled
+            and state.step % self.config.spectral.interval == 0
+        )
+        normalized_due = (
+            self.config.degree_normalized.enabled
+            and state.step % self.config.degree_normalized.interval == 0
+        )
+        if spectral_due or normalized_due:
             try:
-                self._run_svd(layer_name, layer_idx, state, kv_cache, attn_metadata)
+                self._run_svd(
+                    layer_name, layer_idx, state, kv_cache, attn_metadata,
+                    run_spectral=spectral_due, run_normalized=normalized_due,
+                )
             except Exception:
                 logger.exception(
                     "[SVD] error in layer %s at step %d", layer_name, state.step
@@ -264,6 +253,8 @@ class SVDTritonAttentionImpl(TritonAttentionImpl):
         state: PerLayerSVDState,
         kv_cache: torch.Tensor,
         attn_metadata: TritonAttentionMetadata,
+        run_spectral: bool = True,
+        run_normalized: bool = False,
     ) -> None:
         # Stack accumulated Q: [L_q, num_heads, head_size]
         Q_all = torch.cat(state.q_buffer, dim=0).float()
@@ -282,7 +273,14 @@ class SVDTritonAttentionImpl(TritonAttentionImpl):
         Q_all = Q_all[:L]
         K_all = K_all[:L]
 
-        for head_idx in self.config.heads:
+        # Union of active heads for signals that are due
+        heads: set[int] = set()
+        if run_spectral:
+            heads.update(self.config.spectral.heads)
+        if run_normalized:
+            heads.update(self.config.degree_normalized.heads)
+
+        for head_idx in sorted(heads):
             if head_idx >= Q_all.shape[1]:
                 continue
 
@@ -292,9 +290,9 @@ class SVDTritonAttentionImpl(TritonAttentionImpl):
             Qh = Q_all[:, head_idx, :]  # [L, d]
             Kh = K_all[:, kv_head_idx, :]  # [L, d]
 
-            if self.config.operator == "S":
+            if run_spectral and head_idx in self.config.spectral.heads:
                 self._run_svd_scores(layer_name, layer_idx, state, head_idx, Qh, Kh, L)
-            else:
+            if run_normalized and head_idx in self.config.degree_normalized.heads:
                 self._run_svd_normalized(
                     layer_name, layer_idx, state, head_idx, Qh, Kh, L
                 )
@@ -310,13 +308,14 @@ class SVDTritonAttentionImpl(TritonAttentionImpl):
         L: int,
     ) -> None:
         """SVD of the scores matrix S = QK^T."""
+        cfg = self.config.spectral
         device = Qh.device
         matvec = lambda v, Q=Qh, K=Kh: matvec_S(Q, K, v)
         matvec_t = lambda u, Q=Qh, K=Kh: matvec_ST(Q, K, u)
 
-        k = min(self.config.rank, L - 1)
+        k = min(cfg.rank, L - 1)
 
-        if self.config.method == "lanczos":
+        if cfg.method == "lanczos":
             _, S, _ = svd_via_lanczos(
                 matvec=matvec,
                 matvec_t=matvec_t,
@@ -334,7 +333,10 @@ class SVDTritonAttentionImpl(TritonAttentionImpl):
                 device=str(device),
             )
 
-        self._emit_result(layer_name, layer_idx, state, head_idx, L, S.cpu().tolist())
+        self._emit_result(
+            layer_name, layer_idx, state, head_idx, L, S.cpu().tolist(),
+            signal="spectral",
+        )
 
     def _run_svd_normalized(
         self,
@@ -347,10 +349,11 @@ class SVDTritonAttentionImpl(TritonAttentionImpl):
         L: int,
     ) -> None:
         """SVD of the degree-normalized cross-operator M."""
+        cfg = self.config.degree_normalized
         scale = 1.0 / math.sqrt(Qh.shape[1])
-        k = min(self.config.rank, L - 1)
+        k = min(cfg.rank, L - 1)
 
-        if L <= self.config.threshold:
+        if L <= cfg.threshold:
             # TIER 1: materialize
             A = torch.softmax(Qh @ Kh.T * scale, dim=-1)
             M, _, d_k_inv_sqrt = compute_degree_normalized_M(A)
@@ -361,25 +364,25 @@ class SVDTritonAttentionImpl(TritonAttentionImpl):
                 compute_routing_features_materialized(
                     M,
                     k,
-                    self.config.method,
-                    self.config.hodge_target_cv,
-                    self.config.hodge_curl_seed,
+                    cfg.method,
+                    cfg.hodge_target_cv,
+                    cfg.hodge_curl_seed,
                 )
-                if self.config.hodge
+                if cfg.hodge
                 else {}
             )
         else:
             # TIER 2: matrix-free
-            _, d_k_inv_sqrt = compute_dk_blocked(Qh, Kh, scale, self.config.block_size)
+            _, d_k_inv_sqrt = compute_dk_blocked(Qh, Kh, scale, cfg.block_size)
             device = Qh.device
             matvec = lambda v: matvec_M_blocked(
-                Qh, Kh, v, d_k_inv_sqrt, scale, self.config.block_size
+                Qh, Kh, v, d_k_inv_sqrt, scale, cfg.block_size
             )
             matvec_t = lambda u: matvec_MT_blocked(
-                Qh, Kh, u, d_k_inv_sqrt, scale, self.config.block_size
+                Qh, Kh, u, d_k_inv_sqrt, scale, cfg.block_size
             )
 
-            if self.config.method == "lanczos":
+            if cfg.method == "lanczos":
                 _, S, _ = svd_via_lanczos(
                     matvec, matvec_t, L, k, max(2 * k + 2, 20), str(device)
                 )
@@ -389,8 +392,8 @@ class SVDTritonAttentionImpl(TritonAttentionImpl):
             sv_list = S.cpu().tolist()
             tier = "matrix_free"
 
-            if self.config.hodge:
-                lse = compute_logsumexp_blocked(Qh, Kh, scale, self.config.block_size)
+            if cfg.hodge:
+                lse = compute_logsumexp_blocked(Qh, Kh, scale, cfg.block_size)
                 hodge = compute_routing_features_matrix_free(
                     Qh,
                     Kh,
@@ -398,16 +401,17 @@ class SVDTritonAttentionImpl(TritonAttentionImpl):
                     scale,
                     lse,
                     k,
-                    self.config.method,
-                    self.config.block_size,
-                    self.config.hodge_target_cv,
-                    self.config.hodge_curl_seed,
+                    cfg.method,
+                    cfg.block_size,
+                    cfg.hodge_target_cv,
+                    cfg.hodge_curl_seed,
                 )
             else:
                 hodge = {}
 
         self._emit_result(
-            layer_name, layer_idx, state, head_idx, L, sv_list, hodge, tier
+            layer_name, layer_idx, state, head_idx, L, sv_list,
+            signal="degree_normalized", hodge=hodge, tier=tier,
         )
 
     def _emit_result(
@@ -418,6 +422,7 @@ class SVDTritonAttentionImpl(TritonAttentionImpl):
         head_idx: int,
         L: int,
         sv_list: list[float],
+        signal: str,
         hodge: dict | None = None,
         tier: str | None = None,
     ) -> None:
@@ -429,6 +434,7 @@ class SVDTritonAttentionImpl(TritonAttentionImpl):
             if cls._output_fh is None:
                 cls._output_fh = open(self.config.output, "a")
             row: dict = {
+                "signal": signal,
                 "request_id": cls.req_tracker.request_id,
                 "layer": layer_name,
                 "layer_idx": layer_idx,
@@ -437,8 +443,7 @@ class SVDTritonAttentionImpl(TritonAttentionImpl):
                 "L": L,
                 "singular_values": sv_list,
             }
-            if self.config.operator == "M":
-                row["operator"] = "M"
+            if signal == "degree_normalized":
                 row["tier"] = tier
                 if hodge:
                     row["hodge"] = hodge

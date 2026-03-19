@@ -8,7 +8,7 @@ version = "0.1.0"
 requires-python = ">=3.10"
 dependencies = [
     "torch",
-    "pydantic-settings",
+    "pydantic-settings[yaml]",
 ]
 
 [project.optional-dependencies]

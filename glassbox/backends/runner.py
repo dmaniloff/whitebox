@@ -5,9 +5,10 @@ Usage:
     python -m glassbox.backends.runner [OPTIONS]
     python -m glassbox.backends.runner --interval 16 --rank 2 --heads 0 1 2
     python -m glassbox.backends.runner --model facebook/opt-350m --method lanczos
+    python -m glassbox.backends.runner --config glassbox.yaml
 
-Options can also be set via environment variables (prefix GLASSBOX_SVD_)
-or a .env file. CLI args take precedence.
+Options can also be set via glassbox.yaml or legacy GLASSBOX_SVD_* env vars.
+CLI args take highest precedence.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ import vllm
 
 # Import triggers @register_backend(AttentionBackendEnum.CUSTOM)
 import glassbox.backends.svd_backend as svd_mod
+from glassbox.config import GlassboxConfig
 
 logging.basicConfig(
     level=logging.INFO,
@@ -100,6 +102,13 @@ logger = logging.getLogger(__name__)
     help="JSONL output file path. [default: from config (log to stderr)]",
 )
 @click.option(
+    "--config",
+    "config_file",
+    type=click.Path(exists=True),
+    default=None,
+    help="Path to YAML config file. [default: glassbox.yaml if present]",
+)
+@click.option(
     "--max-tokens",
     type=int,
     default=64,
@@ -119,6 +128,7 @@ def main(
     method: str | None,
     heads: tuple[int, ...],
     output: str | None,
+    config_file: str | None,
     operator: str | None,
     threshold: int | None,
     block_size: int | None,
@@ -130,45 +140,93 @@ def main(
 ) -> None:
     """Launch vLLM with the custom SVD attention backend."""
 
-    # Build config: start from env vars / .env defaults, override with CLI args
+    # Build nested config overrides from CLI args
     overrides: dict = {}
+    spectral: dict = {}
+    degree_normalized: dict = {}
+
     if interval is not None:
-        overrides["interval"] = interval
+        spectral["interval"] = interval
     if rank is not None:
-        overrides["rank"] = rank
+        spectral["rank"] = rank
     if method is not None:
-        overrides["method"] = method
+        spectral["method"] = method
     if heads:
-        overrides["heads"] = list(heads)
+        spectral["heads"] = list(heads)
     if output is not None:
         overrides["output"] = output
-    if operator is not None:
-        overrides["operator"] = operator
-    if threshold is not None:
-        overrides["threshold"] = threshold
-    if block_size is not None:
-        overrides["block_size"] = block_size
-    if hodge is not None:
-        overrides["hodge"] = hodge
-    if hodge_target_cv is not None:
-        overrides["hodge_target_cv"] = hodge_target_cv
-    if hodge_curl_seed is not None:
-        overrides["hodge_curl_seed"] = hodge_curl_seed
 
-    # vLLM calls impl_cls(). There doesn't seem to be a way to inject extra args through the vLLM call path.
-    # So we set the config as a class variable on SVDTritonAttentionImpl before vLLM creates the engine.
-    config = svd_mod.SVDConfig(**overrides)
+    # Handle --operator for backward compat
+    if operator == "M":
+        spectral["enabled"] = False
+        degree_normalized["enabled"] = True
+        if interval is not None:
+            degree_normalized["interval"] = interval
+        if rank is not None:
+            degree_normalized["rank"] = rank
+        if method is not None:
+            degree_normalized["method"] = method
+        if heads:
+            degree_normalized["heads"] = list(heads)
+
+    # M-specific params
+    if threshold is not None:
+        degree_normalized["threshold"] = threshold
+    if block_size is not None:
+        degree_normalized["block_size"] = block_size
+    if hodge is not None:
+        degree_normalized["hodge"] = hodge
+    if hodge_target_cv is not None:
+        degree_normalized["hodge_target_cv"] = hodge_target_cv
+    if hodge_curl_seed is not None:
+        degree_normalized["hodge_curl_seed"] = hodge_curl_seed
+
+    if spectral:
+        overrides["spectral"] = spectral
+    if degree_normalized:
+        overrides["degree_normalized"] = degree_normalized
+
+    # Handle --config YAML file: read it and merge (CLI overrides beat YAML)
+    if config_file:
+        import yaml
+
+        with open(config_file) as f:
+            yaml_data = yaml.safe_load(f) or {}
+        for key, val in yaml_data.items():
+            if key not in overrides:
+                overrides[key] = val
+            elif isinstance(overrides[key], dict) and isinstance(val, dict):
+                overrides[key] = {**val, **overrides[key]}
+
+    # vLLM calls impl_cls(). There doesn't seem to be a way to inject extra
+    # args through the vLLM call path. So we set the config as a class
+    # variable on SVDTritonAttentionImpl before vLLM creates the engine.
+    config = GlassboxConfig(**overrides)
     svd_mod.SVDTritonAttentionImpl.config = config
 
     logger.info("Creating vLLM engine with CUSTOM attention backend")
     logger.info("Model: %s", model)
     logger.info(
-        "SVD config: interval=%s rank=%s method=%s heads=%s",
-        config.interval,
-        config.rank,
-        config.method,
-        config.heads,
+        "Config: spectral=%s degree_normalized=%s",
+        "enabled" if config.spectral.enabled else "disabled",
+        "enabled" if config.degree_normalized.enabled else "disabled",
     )
+    if config.spectral.enabled:
+        logger.info(
+            "Spectral: interval=%s rank=%s method=%s heads=%s",
+            config.spectral.interval,
+            config.spectral.rank,
+            config.spectral.method,
+            config.spectral.heads,
+        )
+    if config.degree_normalized.enabled:
+        logger.info(
+            "Degree-normalized: interval=%s rank=%s method=%s heads=%s",
+            config.degree_normalized.interval,
+            config.degree_normalized.rank,
+            config.degree_normalized.method,
+            config.degree_normalized.heads,
+        )
 
     llm = vllm.LLM(
         model=model,
