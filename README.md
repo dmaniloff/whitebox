@@ -196,7 +196,16 @@ The dataset extraction pipeline in `experiments/extract.py` can also write a wid
 This repository expects vLLM to be installed separately.
 
 ```bash
+# using a Ubuntu 24.04 Deep Learning AMI, I just needed to
+source /opt/pytorch/bin/activate 
 pip install vllm==0.15.1
+pip install huggingface-hub==0.36.0
+pip install pydantic-settings==2.12.0
+```
+
+Once you have vLLM installed, you can install the package:
+
+```bash
 pip install -e .
 ```
 
