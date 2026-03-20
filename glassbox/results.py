@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import math
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 SPECTRAL_FEATURE_NAMES = ["sv_ratio", "sv1", "sv_entropy"]
 
@@ -34,9 +34,9 @@ class ScoresMatrixFeatures(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     # Spectral (from singular values)
-    sv1: float | None = None
-    sv_ratio: float | None = None
-    sv_entropy: float | None = None
+    sv1: float | None = Field(None, description="Leading singular value of S.")
+    sv_ratio: float | None = Field(None, description="sigma1/sigma2 ratio.")
+    sv_entropy: float | None = Field(None, description="Entropy of normalized singular value distribution.")
 
     @classmethod
     def from_singular_values(cls, svs: list[float]) -> ScoresMatrixFeatures:
@@ -49,19 +49,19 @@ class DegreeNormalizedFeatures(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     # Spectral (from singular values)
-    sv1: float | None = None
-    sv_ratio: float | None = None
-    sv_entropy: float | None = None
+    sv1: float | None = Field(None, description="Leading singular value of M.")
+    sv_ratio: float | None = Field(None, description="sigma1/sigma2 ratio.")
+    sv_entropy: float | None = Field(None, description="Entropy of normalized singular value distribution.")
 
     # Routing (from Hodge decomposition)
-    phi_hat: float | None = None
-    sigma2: float | None = None
-    G: float | None = None
-    Gamma: float | None = None
-    C: float | None = None
-    curl_ratio: float | None = None
-    sigma2_asym: float | None = None
-    commutator_norm: float | None = None
+    phi_hat: float | None = Field(None, description="Conductance (1 - sigma2). High = bottlenecked through one mode.")
+    sigma2: float | None = Field(None, description="Second singular value of M.")
+    G: float | None = Field(None, description="Total asymmetry: ||M_asym||_F / ||M||_F.")
+    Gamma: float | None = Field(None, description="Gradient coefficient: potential-driven portion of asymmetry.")
+    C: float | None = Field(None, description="Curl coefficient: circulatory portion of asymmetry (triangle-sampled).")
+    curl_ratio: float | None = Field(None, description="C / (G + eps). Share of asymmetry that is circulatory.")
+    sigma2_asym: float | None = Field(None, description="Second singular value of M_asym.")
+    commutator_norm: float | None = Field(None, description="||[M_sym, M_asym]||_F / ||M||_F. Entanglement of symmetric and antisymmetric parts.")
 
     @classmethod
     def from_singular_values(
