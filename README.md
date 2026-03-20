@@ -2,7 +2,7 @@
 
 *Grab vLLM's attention.*
 
-`glassbox` is a vLLM plugin for extracting model internals during inference and turning them into compact, structured signals for downstream reliability systems. These signals include spectral features and flow-based features derived from attention operators, including Hodge-style decompositions that provide a routing-oriented view of model behavior.
+`glassbox` is a vLLM plugin for extracting model internals during inference and turning them into compact, structured signals for downstream reliability systems. These signals include spectral features and flow-based features that provide a routing-oriented view of model behavior.
 
 The main use case is online or offline analysis of failure modes in LLM generation: hallucination detection, task drift detection, uncertainty quantification, routing analysis, and other forms of model-behavior monitoring. `glassbox` hooks into vLLM's attention path, reconstructs the per-sequence tensors it needs, and emits low-dimensional features that are cheap to store and easy to feed into classifiers, dashboards, or batch analysis jobs.
 
