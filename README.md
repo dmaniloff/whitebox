@@ -118,29 +118,29 @@ Some routing metrics need access to selected entries of `M`. Instead of building
 
 These come from the singular values of the pre-softmax scores matrix `S = QK^T`.
 
-| Feature | Meaning | Why it may matter |
+| Feature | Formula | Meaning |
 |---|---|---|
-| `sv1` | Leading singular value | Strength of the dominant attention mode |
-| `sv_ratio` | `sigma1 / sigma2` | High values suggest near-rank-1 structure; low values suggest multiple competing modes |
-| `sv_entropy` | Entropy of normalized singular values | Measures how concentrated or diffuse the spectrum is |
+| `sv1` | `σ₁(S)` | Leading singular value of the scores matrix. Strength of the dominant attention mode |
+| `sv_ratio` | `σ₁(S) / σ₂(S)` | Spectral sharpness. High values suggest near-rank-1 structure; low values suggest multiple competing modes |
+| `sv_entropy` | `-Σ pᵢ log pᵢ`, with `pᵢ = σᵢ / Σⱼ σⱼ` | Entropy of the normalized singular-value distribution. Measures how concentrated or diffuse the spectrum is |
 
 ### Routing features from the Degree-normalized matrix (post-softmax attention)
 
 These come from the singular values and routing decomposition of the normalized operator `M`.
 
-| Feature | Meaning | Why it may matter |
+| Feature | Formula | Meaning |
 |---|---|---|
-| `sv1` | Leading singular value of `M` | Dominance of the top routing mode |
-| `sv_ratio` | `sigma1 / sigma2` | Separation between the top mode and the rest |
-| `sv_entropy` | Entropy of normalized singular values | Spread of routing mass across modes |
-| `sigma2` | Second singular value | Persistence of non-dominant routing structure |
-| `phi_hat` | `1 - sigma2` | A conductance-like bottleneck score |
-| `G` | Total asymmetry | How far routing is from symmetric flow |
-| `Gamma` | Gradient component of asymmetry | Potential-driven part of the asymmetry |
-| `C` | Curl component of asymmetry | Circulatory or loop-like routing behavior |
-| `curl_ratio` | `C / G` | Fraction of asymmetry that is circulatory |
-| `sigma2_asym` | Second singular value of the antisymmetric part | Structure in asymmetric routing |
-| `commutator_norm` | Entanglement between symmetric and antisymmetric parts | Interaction between the two routing regimes |
+| `sv1` | `σ₁(M)` | Leading singular value of `M`. Dominance of the top routing mode |
+| `sv_ratio` | `σ₁(M) / σ₂(M)` | Separation between the top routing mode and the rest |
+| `sv_entropy` | `-Σ pᵢ log pᵢ`, with `pᵢ = σᵢ / Σⱼ σⱼ` | Entropy of the normalized singular-value distribution. Spread of routing mass across modes |
+| `sigma2` | `σ₂(M)` | Second singular value of `M`. Raw spectral-gap measure and persistence of non-dominant routing structure |
+| `phi_hat` | `1 - σ₂(M)` | Conductance-like bottleneck score. High `φ̂` means attention concentrates through a single dominant mode; low `φ̂` means multiple competing routing paths |
+| `G` | `‖M_asym‖_F / ‖M‖_F` | Total asymmetry. Fraction of `M`'s energy in the antisymmetric part, where `M_asym = (M - Mᵀ) / 2` |
+| `Gamma` | `√(G² - C²)` | Gradient coefficient. The portion of asymmetry that is potential-driven rather than circulatory |
+| `C` | `curl_RMS / (√2 · ‖M‖_F)` | Curl coefficient. The portion of asymmetry due to irreversible circulation, estimated by triangle sampling in the matrix-free path |
+| `curl_ratio` | `C / (G + ε)` | Curl fraction. What share of total asymmetry is circulatory versus gradient-driven |
+| `sigma2_asym` | `σ₂(M_asym)` | Second singular value of the antisymmetric part. Captures whether the irreversible component has multiple significant modes |
+| `commutator_norm` | `‖[M_sym, M_asym]‖_F / ‖M‖_F` | Commutator norm. Measures how much the symmetric and antisymmetric parts interfere with each other, where `[A, B] = AB - BA` |
 
 The routing and Hodge-style metrics live in `glassbox/hodge.py`. The feature schemas are defined in `glassbox/results.py`.
 
