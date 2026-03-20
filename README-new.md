@@ -53,7 +53,7 @@ At runtime, the backend:
 2. Captures and accumulates `Q` slices across prefill and decode for the active sequence.
 3. Extracts `K` from vLLM's paged KV cache when a snapshot is due.
 4. Runs matrix-free SVD and optional routing analysis.
-5. Emits compact JSONL rows instead of giant tensors.
+5. Emits JSONL rows with feature snapshots.
 
 This lets you observe attention structure during real generation rather than in a separate offline re-run.
 
