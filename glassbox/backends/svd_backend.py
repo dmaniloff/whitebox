@@ -33,6 +33,11 @@ from vllm.v1.attention.backends.triton_attn import (
 )
 
 from glassbox.config import GlassboxConfig
+from glassbox.results import (
+    DegreeNormalizedFeatures,
+    SVDSnapshot,
+    ScoresMatrixFeatures,
+)
 from glassbox.hodge import (
     compute_routing_features_materialized,
     compute_routing_features_matrix_free,
@@ -333,10 +338,19 @@ class SVDTritonAttentionImpl(TritonAttentionImpl):
                 device=str(device),
             )
 
-        self._emit_result(
-            layer_name, layer_idx, state, head_idx, L, S.cpu().tolist(),
-            signal="scores_matrix",
+        sv_list = S.cpu().tolist()
+        snapshot = SVDSnapshot(
+            feature_group="scores_matrix",
+            request_id=type(self).req_tracker.request_id,
+            layer=layer_name,
+            layer_idx=layer_idx,
+            head=head_idx,
+            step=state.step,
+            L=L,
+            singular_values=sv_list,
+            features=ScoresMatrixFeatures.from_singular_values(sv_list),
         )
+        self._emit_result(snapshot)
 
     def _run_svd_normalized(
         self,
@@ -369,7 +383,7 @@ class SVDTritonAttentionImpl(TritonAttentionImpl):
                     cfg.hodge_curl_seed,
                 )
                 if cfg.hodge
-                else {}
+                else None
             )
         else:
             # TIER 2: matrix-free
@@ -407,57 +421,43 @@ class SVDTritonAttentionImpl(TritonAttentionImpl):
                     cfg.hodge_curl_seed,
                 )
             else:
-                hodge = {}
+                hodge = None
 
-        self._emit_result(
-            layer_name, layer_idx, state, head_idx, L, sv_list,
-            signal="degree_normalized_matrix", hodge=hodge, tier=tier,
+        snapshot = SVDSnapshot(
+            feature_group="degree_normalized_matrix",
+            request_id=type(self).req_tracker.request_id,
+            layer=layer_name,
+            layer_idx=layer_idx,
+            head=head_idx,
+            step=state.step,
+            L=L,
+            singular_values=sv_list,
+            tier=tier,
+            features=DegreeNormalizedFeatures.from_singular_values(
+                sv_list, routing=hodge if hodge else None,
+            ),
         )
+        self._emit_result(snapshot)
 
-    def _emit_result(
-        self,
-        layer_name: str,
-        layer_idx: int | None,
-        state: PerLayerSVDState,
-        head_idx: int,
-        L: int,
-        sv_list: list[float],
-        signal: str,
-        hodge: dict | None = None,
-        tier: str | None = None,
-    ) -> None:
+    def _emit_result(self, snapshot: SVDSnapshot) -> None:
         """Write SVD results to JSONL or log."""
         cls = type(self)
-        k = len(sv_list)
 
         if self.config.output:
             if cls._output_fh is None:
                 cls._output_fh = open(self.config.output, "a")
-            row: dict = {
-                "signal": signal,
-                "request_id": cls.req_tracker.request_id,
-                "layer": layer_name,
-                "layer_idx": layer_idx,
-                "head": head_idx,
-                "step": state.step,
-                "L": L,
-                "singular_values": sv_list,
-            }
-            if signal == "degree_normalized_matrix":
-                row["tier"] = tier
-                if hodge:
-                    row["hodge"] = hodge
-            cls._output_fh.write(json.dumps(row) + "\n")
+            cls._output_fh.write(
+                json.dumps(snapshot.model_dump(exclude_none=True)) + "\n"
+            )
             cls._output_fh.flush()
         else:
+            k = len(snapshot.singular_values)
             logger.info(
                 "[SVD] %s head=%d step=%d L=%d top-%d singular values: %s",
-                layer_name,
-                head_idx,
-                state.step,
-                L,
+                snapshot.layer,
+                snapshot.head,
+                snapshot.step,
+                snapshot.L,
                 k,
-                sv_list,
+                snapshot.singular_values,
             )
-            if hodge:
-                logger.info("[SVD] %s head=%d hodge=%s", layer_name, head_idx, hodge)

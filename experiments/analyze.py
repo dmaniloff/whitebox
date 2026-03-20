@@ -8,15 +8,14 @@ Usage:
 from __future__ import annotations
 
 import json
-import math
 import sys
 from pathlib import Path
 
 import click
 
-# ── Constants ──────────────────────────────────────────────────────────────
+from glassbox.results import SPECTRAL_FEATURE_NAMES, SVDSnapshot
 
-SPECTRAL_FEATURES = ["sv_ratio", "sv1", "sv_entropy"]
+# ── Constants ──────────────────────────────────────────────────────────────
 
 LABEL_COLORS = {0: "#1565C0", 1: "#C62828"}
 LABEL_NAMES = {0: "Correct", 1: "Hallucinated"}
@@ -595,90 +594,71 @@ def main(results_dir: str, output_dir: str | None) -> None:
 
     # ── Load data ─────────────────────────────────────────────────────────
     svd_path = base / "svd_features.jsonl"
-    legacy_path = base / "features.jsonl"
-
-    if svd_path.exists():
-        log("Loading svd_features.jsonl (structured output from backend)")
-        svd_rows = []
-        with open(svd_path) as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                row = json.loads(line)
-                svs = row["singular_values"]
-                # Compute derived features from raw singular values
-                row["sv_ratio"] = (
-                    svs[0] / svs[1] if len(svs) >= 2 and svs[1] > 0 else None
-                )
-                row["sv1"] = svs[0]
-                total = sum(svs)
-                if total > 0:
-                    ps = [s / total for s in svs]
-                    row["sv_entropy"] = -sum(p * math.log(p + 1e-12) for p in ps)
-                else:
-                    row["sv_entropy"] = None
-                del row["singular_values"]
-                # Default signal for backward compat
-                if "signal" not in row:
-                    row["signal"] = "scores_matrix"
-                # Flatten hodge dict into columns
-                if "hodge" in row and isinstance(row["hodge"], dict):
-                    for hk, hv in row["hodge"].items():
-                        row[f"hodge_{hk}"] = hv
-                    del row["hodge"]
-                svd_rows.append(row)
-
-        df_all = pd.DataFrame(svd_rows)
-
-        # Load sample metadata and join on request_id
-        samples_path = base / "samples.jsonl"
-        if not samples_path.exists():
-            click.echo(f"No samples.jsonl found in {base}")
-            sys.exit(1)
-
-        sample_rows = []
-        with open(samples_path) as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    sample_rows.append(json.loads(line))
-        df_samples = pd.DataFrame(sample_rows)
-
-        # Join: always label, plus phase/sample_id/prompt_length if present
-        join_cols = ["request_id", "label"]
-        for col in ["sample_id", "phase", "prompt_length"]:
-            if col in df_samples.columns:
-                join_cols.append(col)
-
-        df_all = df_all.merge(df_samples[join_cols], on="request_id", how="left")
-
-        has_phases = "phase" in df_all.columns and {"question", "full"} <= set(
-            df_all["phase"].unique()
-        )
-
-        # Normalize sample_idx column
-        if "sample_id" in df_all.columns:
-            df_all = df_all.rename(columns={"sample_id": "sample_idx"})
-        elif "sample_idx" not in df_all.columns:
-            df_all = df_all.rename(columns={"request_id": "sample_idx"})
-
-    elif legacy_path.exists():  # TODO: remove legacy path
-        log("Loading features.jsonl (legacy log-parsed output)")
-        rows = []
-        with open(legacy_path) as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    row = json.loads(line)
-                    row.pop("singular_values", None)
-                    row.setdefault("signal", "scores_matrix")
-                    rows.append(row)
-        df_all = pd.DataFrame(rows)
-        has_phases = False
-    else:
-        click.echo(f"No svd_features.jsonl or features.jsonl found in {base}")
+    if not svd_path.exists():
+        click.echo(f"No svd_features.jsonl found in {base}")
         sys.exit(1)
+
+    log("Loading svd_features.jsonl")
+    svd_rows = []
+    with open(svd_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            snap = SVDSnapshot.from_jsonl_row(json.loads(line))
+            row = {
+                "signal": snap.feature_group,
+                "request_id": snap.request_id,
+                "layer": snap.layer,
+                "layer_idx": snap.layer_idx,
+                "head": snap.head,
+                "step": snap.step,
+                "L": snap.L,
+            }
+            if snap.tier is not None:
+                row["tier"] = snap.tier
+            # Flatten features to top-level columns
+            feat_dict = snap.features.model_dump(exclude_none=True)
+            for k, v in feat_dict.items():
+                if k in SPECTRAL_FEATURE_NAMES:
+                    row[k] = v
+                else:
+                    row[f"hodge_{k}"] = v
+            svd_rows.append(row)
+
+    df_all = pd.DataFrame(svd_rows)
+
+    # Load sample metadata and join on request_id
+    samples_path = base / "samples.jsonl"
+    if not samples_path.exists():
+        click.echo(f"No samples.jsonl found in {base}")
+        sys.exit(1)
+
+    sample_rows = []
+    with open(samples_path) as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                sample_rows.append(json.loads(line))
+    df_samples = pd.DataFrame(sample_rows)
+
+    # Join: always label, plus phase/sample_id/prompt_length if present
+    join_cols = ["request_id", "label"]
+    for col in ["sample_id", "phase", "prompt_length"]:
+        if col in df_samples.columns:
+            join_cols.append(col)
+
+    df_all = df_all.merge(df_samples[join_cols], on="request_id", how="left")
+
+    has_phases = "phase" in df_all.columns and {"question", "full"} <= set(
+        df_all["phase"].unique()
+    )
+
+    # Normalize sample_idx column
+    if "sample_id" in df_all.columns:
+        df_all = df_all.rename(columns={"sample_id": "sample_idx"})
+    elif "sample_idx" not in df_all.columns:
+        df_all = df_all.rename(columns={"request_id": "sample_idx"})
 
     # ── Basic stats ───────────────────────────────────────────────────────
     # Use "full" phase rows (or all rows if no phases) for stats
@@ -738,7 +718,7 @@ def main(results_dir: str, output_dir: str | None) -> None:
             continue
 
         # Determine features for this signal
-        features = list(SPECTRAL_FEATURES)
+        features = list(SPECTRAL_FEATURE_NAMES)
         feat_labels = ["\u03c3\u2081/\u03c3\u2082 Ratio", "\u03c3\u2081 (Leading SV)", "SV Entropy"]
 
         # Add hodge features if present (degree_normalized_matrix with hodge=True)

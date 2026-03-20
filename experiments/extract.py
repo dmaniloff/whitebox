@@ -11,7 +11,6 @@ Usage:
 from __future__ import annotations
 
 import json
-import math
 import random
 from datetime import datetime
 from pathlib import Path
@@ -115,7 +114,7 @@ DATASET_LOADERS = {
     "truthfulqa": load_truthfulqa,
 }
 
-SPECTRAL_FEATURES = ["sv_ratio", "sv1", "sv_entropy"]
+from glassbox.results import SPECTRAL_FEATURE_NAMES, SVDSnapshot
 
 
 def _write_parquet(svd_features_path: Path, samples_path: Path, out_path: Path) -> None:
@@ -136,21 +135,24 @@ def _write_parquet(svd_features_path: Path, samples_path: Path, out_path: Path) 
             line = line.strip()
             if not line:
                 continue
-            row = json.loads(line)
-            svs = row["singular_values"]
-            row["sv_ratio"] = svs[0] / svs[1] if len(svs) >= 2 and svs[1] > 0 else None
-            row["sv1"] = svs[0]
-            total = sum(svs)
-            if total > 0:
-                ps = [s / total for s in svs]
-                row["sv_entropy"] = -sum(p * math.log(p + 1e-12) for p in ps)
-            else:
-                row["sv_entropy"] = None
-            if "hodge" in row and isinstance(row["hodge"], dict):
-                for hk, hv in row["hodge"].items():
-                    row[f"hodge_{hk}"] = hv
-                del row["hodge"]
-            del row["singular_values"]
+            snap = SVDSnapshot.from_jsonl_row(json.loads(line))
+            row = {
+                "signal": snap.feature_group,
+                "request_id": snap.request_id,
+                "layer": snap.layer,
+                "layer_idx": snap.layer_idx,
+                "head": snap.head,
+                "step": snap.step,
+                "L": snap.L,
+            }
+            if snap.tier is not None:
+                row["tier"] = snap.tier
+            feat_dict = snap.features.model_dump(exclude_none=True)
+            for k, v in feat_dict.items():
+                if k in SPECTRAL_FEATURE_NAMES:
+                    row[k] = v
+                else:
+                    row[f"hodge_{k}"] = v
             svd_rows.append(row)
 
     df_svd = pd.DataFrame(svd_rows)
@@ -175,7 +177,7 @@ def _write_parquet(svd_features_path: Path, samples_path: Path, out_path: Path) 
     sample_col = "sample_id" if "sample_id" in df.columns else "request_id"
 
     # Determine features to pivot
-    features = list(SPECTRAL_FEATURES)
+    features = list(SPECTRAL_FEATURE_NAMES)
     hodge_cols = [c for c in df.columns if c.startswith("hodge_") and df[c].notna().any()]
     features.extend(sorted(hodge_cols))
 
